@@ -10,7 +10,7 @@ const API_URL = 'http://localhost:3001/turn'
 const GENERATE_URL = 'http://localhost:3001/generate'
 const SUMMARY_URL = 'http://localhost:3001/summary'
 const MAX_ROUNDS = 8
-const TYPEWRITER_MS_PER_CHAR = 40
+const TYPEWRITER_MS_PER_CHAR = 30
 const DEFAULT_STARTER_JIMMY = 'Jimmy has an essay due in 24 hours and is conflicted about whether to use AI... can you help him?'
 const DEFAULT_STARTER_PRIYA = 'Priya has an essay due in 24 hours and is conflicted about whether to use AI... can you help her?'
 const START_BUTTON_LABEL = 'press C to begin'
@@ -31,6 +31,7 @@ const LOADING_PHRASES = [
 function App() {
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(false)
+  const [finalLoading, setFinalLoading] = useState(false)
   const [error, setError] = useState(null)
   const [displayedLength, setDisplayedLength] = useState(0)
   const [chunkIndex, setChunkIndex] = useState(0)
@@ -231,28 +232,44 @@ function App() {
     return () => clearInterval(id)
   }, [loading])
 
-  const sendTurn = useCallback(async (choice, narrative) => {
+  const sendTurn = useCallback(async (choice, narrative, chosenOptionText) => {
     setLoading(true)
     setError(null)
     try {
       const res = await fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ choice, paragraph: narrative, narrative }),
+        body: JSON.stringify({ choice, paragraph: narrative, narrative, chosenOptionText }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       if (data.error) throw new Error(data.error)
       const { narrative: nextNarrative, options: nextOptions, finalSummary, dialogue: nextDialogue } = data
-      setHistory((prev) => {
-        const next = [...prev]
-        const entry = { narrative: nextNarrative, options: nextOptions ?? {}, finalSummary: !!finalSummary, dialogue: Array.isArray(nextDialogue) ? nextDialogue : [] }
-        if (next.length > 0 && next[next.length - 1].choice === choice && next[next.length - 1].narrative === undefined) {
-          next[next.length - 1] = { ...next[next.length - 1], ...entry }
-          return next
-        }
-        return [...prev, { choice, ...entry }].slice(-MAX_ROUNDS)
-      })
+      if (finalSummary) {
+        setFinalLoading(true)
+        setTimeout(() => {
+          setHistory((prev) => {
+            const next = [...prev]
+            const entry = { narrative: nextNarrative, options: nextOptions ?? {}, finalSummary: true, dialogue: Array.isArray(nextDialogue) ? nextDialogue : [] }
+            if (next.length > 0 && next[next.length - 1].choice === choice && next[next.length - 1].narrative === undefined) {
+              next[next.length - 1] = { ...next[next.length - 1], ...entry }
+              return next
+            }
+            return [...prev, { choice, ...entry }].slice(-MAX_ROUNDS)
+          })
+          setFinalLoading(false)
+        }, 2000)
+      } else {
+        setHistory((prev) => {
+          const next = [...prev]
+          const entry = { narrative: nextNarrative, options: nextOptions ?? {}, finalSummary: false, dialogue: Array.isArray(nextDialogue) ? nextDialogue : [] }
+          if (next.length > 0 && next[next.length - 1].choice === choice && next[next.length - 1].narrative === undefined) {
+            next[next.length - 1] = { ...next[next.length - 1], ...entry }
+            return next
+          }
+          return [...prev, { choice, ...entry }].slice(-MAX_ROUNDS)
+        })
+      }
       setChunkIndex(0)
     } catch (err) {
       setError(err.message || 'Request failed')
@@ -335,10 +352,11 @@ function App() {
       if (history.length === 0 || loading || history.length >= 7) return
       const last = history[history.length - 1]
       const narrative = last.narrative ?? ''
+      const chosenOptionText = latestOptions && latestOptions[choice] ? latestOptions[choice] : ''
       setHistory((prev) => [...prev, { choice }].slice(-MAX_ROUNDS))
-      await sendTurn(choice, narrative)
+      await sendTurn(choice, narrative, chosenOptionText)
     },
-    [history, loading, sendTurn]
+    [history, loading, sendTurn, latestOptions]
   )
 
   const handleAnyKeyOrClick = useCallback(() => {
@@ -505,10 +523,17 @@ function App() {
       <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden px-2 py-1 relative">
         {((history.length > 0 && !lastEntry?.finalSummary) || (history.length === 0 && (showingStarterIntro || loading))) && (
           <div
-            className="absolute inset-0 z-0 bg-cover bg-center opacity-60"
+            className="absolute inset-0 z-0 bg-cover bg-center opacity-90"
             style={{
               backgroundImage: `url(${history.length === 0 ? classBg : backgroundPhase === 1 ? classBg : backgroundPhase === 2 ? libraryBg : officeBg})`,
             }}
+            aria-hidden
+          />
+        )}
+        {history.length === 0 && !showingStarterIntro && !loading && !finalLoading && (
+          <div
+            className="absolute inset-0 z-0 bg-cover bg-center opacity-60 blur-sm"
+            style={{ backgroundImage: `url(${classBg})` }}
             aria-hidden
           />
         )}
@@ -563,9 +588,9 @@ function App() {
           </div>
         )}
 
-        {history.length === 0 && showingStarterIntro && (
-          <div className="flex-1 flex flex-col items-center justify-center gap-2 min-h-0 py-2">
-            <p className="text-amber-200/95 text-xs leading-tight whitespace-pre-wrap break-words m-0 text-center max-w-80 px-2" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+        {history.length === 0 && showingStarterIntro && !finalLoading && (
+          <div className=" self-center rounded-md border-2 border-amber-400/60 justify-self-center mt-32 backdrop-blur-md bg-slate-950/30 h-min flex flex-col items-center justify-center gap-2 min-h-0 py-2">
+            <p className="text-amber-100 text-xs leading-tight whitespace-pre-wrap break-words m-0 text-center max-w-80 px-2" style={{ fontFamily: '"Press Start 2P", cursive' }}>
               {renderTextWithQuotes(introText.slice(0, introDisplayedLength))}
             </p>
             {introTypewriterDone && (
@@ -574,7 +599,7 @@ function App() {
                 tabIndex={0}
                 onClick={() => { setShowingStarterIntro(false); sendBeginQuest() }}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setShowingStarterIntro(false); sendBeginQuest() } }}
-                className="shrink-0 text-amber-400/80 text-[10px] lowercase border-0 p-0 cursor-pointer hover:text-amber-400 mb-0.5 w-full text-center"
+                className="shrink-0 text-amber-200/80 text-[10px] lowercase border-0 p-0 cursor-pointer hover:text-amber-400 mb-0.5 w-full text-center"
                 style={{ fontFamily: '"Press Start 2P", cursive' }}
               >
                 [press any key to continue]
@@ -583,7 +608,18 @@ function App() {
           </div>
         )}
 
-        {loading && (
+        {finalLoading && (
+          <div className="flex-1 flex flex-col items-center justify-center gap-2 min-h-0 py-2">
+            <p className="text-amber-200/95 text-xs bg-slate-900/50 px-1 py-0.5 rounded-md leading-tight whitespace-pre-wrap break-words m-0 text-center max-w-80 px-2" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+              Professor Kim is thinking about your choices...
+            </p>
+            <p className="text-amber-400/90 text-[10px] lowercase flex-none bg-slate-900/50 px-1 py-0.5 rounded-md" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+              loading summary...
+            </p>
+          </div>
+        )}
+
+        {loading && !finalLoading && (
           <div className="flex-1 flex flex-col items-center justify-center gap-2 min-h-0 py-2">
             <div className="speech-bubble flex-none px-3 py-2 max-w-80" style={{ opacity: loadingPhraseOpacity }}>
               <p className="text-amber-200/95 text-[9px] leading-tight whitespace-pre-wrap break-words m-0" style={{ fontFamily: '"Press Start 2P", cursive' }}>
@@ -595,20 +631,20 @@ function App() {
               alt={selectedCharacter === 'Priya' ? 'Priya' : 'Jimmy'}
               className="w-14 h-14 object-cover rounded-full border-2 border-amber-400/60 flex-shrink-0"
             />
-            <p className="text-amber-400/90 text-[10px] lowercase flex-none" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+            <p className="text-amber-200/90 bg-slate-900/50 px-1 py-0.5 rounded-md text-[10px] lowercase flex-none" style={{ fontFamily: '"Press Start 2P", cursive' }}>
               generating story{'.'.repeat(loadingDots)}
             </p>
           </div>
         )}
 
-        {!loading && pendingPhaseTransition && (
+        {!loading && !finalLoading && pendingPhaseTransition && (
           <div className="flex-1 flex flex-col items-center justify-center gap-2 min-h-0 py-2">
-            <p className="text-amber-200/95 text-xs leading-tight whitespace-pre-wrap break-words m-0 text-center" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+            <p className="text-amber-200/95 text-xs bg-slate-900/60 px-1 py-0.5 rounded-md leading-tight whitespace-pre-wrap break-words m-0 text-center" style={{ fontFamily: '"Press Start 2P", cursive' }}>
               {transitionText.slice(0, transitionDisplayedLength)}
             </p>
             {transitionTypewriterDone && (
               <span
-                className="shrink-0 text-amber-400/80 text-[10px] lowercase border-0 p-0 cursor-pointer hover:text-amber-400 mb-0.5 w-full text-center"
+                className="shrink-0 text-amber-300/80 bg-slate-900/70 text-nowrap w-min px-1 py-0.5 rounded-md text-[10px] lowercase border-0 p-0 cursor-pointer hover:text-amber-400 mb-0.5 w-full text-center"
                 style={{ fontFamily: '"Press Start 2P", cursive' }}
               >
                 [press any key to continue]
@@ -621,13 +657,13 @@ function App() {
           <p className="text-red-400 text-[10px] text-center font-mono py-0.5">{error}</p>
         )}
 
-        {!pendingPhaseTransition && !isFinalSummary && ((latestNarrative !== '' && !error && !loading) || (isPendingResponse && !loading)) && (
+        {!pendingPhaseTransition && !isFinalSummary && !finalLoading && ((latestNarrative !== '' && !error && !loading) || (isPendingResponse && !loading)) && (
           <>
             {/* Options above: flex-1 so bar stays at bottom */}
             <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
               {canChoose && latestOptions && (
                 <div className="shrink-0 flex flex-col gap-0.5 py-1">
-                  <div className="flex flex-wrap gap-1 ml-28 mt-4">
+                  <div className="flex flex-wrap gap-1 ml-0 mt-4">
                   <span
               className="shrink-0 text-amber-400/80 text-[10px] lowercase border-0 p-0 cursor-pointer hover:text-amber-400 mb-0.5 w-full text-end"
               style={{ fontFamily: '"Press Start 2P", cursive' }}
@@ -637,14 +673,13 @@ function App() {
                     {['A', 'B', 'C'].map((key) => {
                       const bgColor = key === 'A' ? '#ffafe4' : key === 'B' ? '#7de2f4' : '#4bf296'
                       return (
-                      <div key={key} onClick={() => handleChoice(key)} className='flex gap-1 w-80'>
-                        <div className='text-[16px] rounded-md w-14 h-12 flex items-center justify-center' style={{ fontFamily: '"Press Start 2P", cursive', backgroundColor: bgColor, color: '#000' }}>
+                      <div key={key} onClick={() => handleChoice(key)} className='flex gap-1 w-[420px]'>
+                        <div className='w-full text-[10px] rounded-md px-2 py-2 border border-black backdrop-blur-lg' style={{ fontFamily: '"Press Start 2P", cursive', color: '#000000', backgroundColor: `${bgColor}` }}>
+                          {latestOptions[key] ?? ''}
+                        </div>
+                        <div className='text-[16px] rounded-md w-14 h-12 flex items-center justify-center' style={{ fontFamily: '"Press Start 2P", cursive', color: bgColor, backgroundColor: '#000' }}>
                           {key}
                         </div>
-                      <div className='w-full text-[9px] rounded-md px-1 py-2' style={{ fontFamily: '"Press Start 2P", cursive', backgroundColor: '#00000099', color: bgColor }}>
-                        {latestOptions[key] ?? ''}
-                      </div>
-                        
                       </div>
                       
                       )
@@ -654,35 +689,37 @@ function App() {
               )}
             </div>
             {/* Dialogue bar fixed at bottom: phase label, portrait, name, text box, continue */}
-            <div className="flex-none flex flex-col shrink-0 w-full min-w-0">
-              <p className="text-amber-400/90 text-[8px] uppercase tracking-wider phase-label-step shrink-0" style={{ fontFamily: '"Press Start 2P", cursive' }}>
-                {phaseLabel}
-              </p>
+            <div className="flex-none flex flex-col shrink-0 w-full min-w-0 items-end">
+              <div className="bg-slate-900/50 px-1 py-0.5 mb-0.5 rounded-md w-min">
+                <p className="text-slate-100/70 text-nowrap text-[8px] uppercase tracking-wider phase-label-step shrink-0" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+                  {phaseLabel}
+                </p>
+              </div>
               {isPendingResponse ? (
                 <div className="flex-none px-2 py-1 bg-slate-800/95 border-2 border-amber-400/90 rounded opacity-60 flex items-center justify-center min-h-[3rem]">
                   <p className="text-amber-200/95 text-xs">...</p>
                 </div>
               ) : (
                 <>
-                  <div className="flex-none flex flex-row gap-2 items-stretch w-full min-w-0">
+                  <div className="flex-none flex flex-row gap-1 items-stretch w-full min-w-0">
                     {currentDialogue && (
                       <div className="flex-shrink-0 flex flex-col items-center gap-0.5">
                         {getPortraitForSpeaker(currentDialogue.speaker) ? (
                           <img
                             src={getPortraitForSpeaker(currentDialogue.speaker)}
                             alt={currentDialogue.speaker}
-                            className="w-12 h-12 object-cover rounded border-2 border-amber-400/70"
+                            className="w-18 h-18 object-cover rounded border-2 border-amber-400/70"
                           />
                         ) : (
                           <div className="w-12 h-12 rounded border-2 border-slate-500 bg-slate-700 flex items-center justify-center text-slate-400 text-lg" style={{ fontFamily: '"Press Start 2P", cursive' }}>?</div>
                         )}
-                        <span className="text-amber-400/90 text-[8px]" style={{ fontFamily: '"Press Start 2P", cursive' }}>{currentDialogue.speaker}</span>
                       </div>
                     )}
                     <div
                       className="flex-1 min-w-0 px-2 py-1 bg-slate-800/95 border-2 border-amber-400/90 rounded flex flex-col"
                       style={{ fontFamily: '"Press Start 2P", cursive' }}
                     >
+                      <span className="text-amber-300/95 text-[8px] bg-slate-700 absolute -translate-x-2 -translate-y-6 px-1 py-0.5 border-2 border-amber-400/90 rounded" style={{ fontFamily: '"Press Start 2P", cursive' }}>{currentDialogue.speaker}</span>
                       <p className="text-amber-200/95 text-xs leading-tight whitespace-pre-wrap break-words">
                         {renderTextWithQuotes(displayedText)}
                         {typewriterDoneForChunk && (dialogueList ? dialogueIndex < dialogueList.length - 1 : needsChunking && chunkIndex < chunks.length - 1) ? (
@@ -702,7 +739,7 @@ function App() {
                       className="shrink-0 text-amber-400/80 text-[10px] lowercase border-0 p-0 cursor-pointer hover:text-amber-400 mb-0.5 w-full text-center"
                       style={{ fontFamily: '"Press Start 2P", cursive' }}
                     >
-                      [press any key to continue]
+                      {/* [press any key to continue] */}
                     </span>
                   )}
                 </>
@@ -711,7 +748,7 @@ function App() {
           </>
         )}
 
-        {isEndOfStory && isFinalSummary && history.length > 0 && (
+        {isEndOfStory && isFinalSummary && history.length > 0 && !finalLoading && (
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden py-2 gap-2">
             <h2 className="text-amber-300 text-sm font-bold shrink-0 text-center tracking-wide" style={{ fontFamily: '"Press Start 2P", cursive', textShadow: '0 0 8px rgba(253, 224, 71, 0.6)' }}>
               Quest Complete
@@ -731,7 +768,7 @@ function App() {
                         <img
                           src={getPortraitForSpeaker(line.speaker)}
                           alt={line.speaker}
-                          className="w-10 h-10 object-cover rounded border-2 border-amber-400/70"
+                          className="w-16 h-16 object-cover rounded border-2 border-amber-400/70"
                         />
                       ) : (
                         <div className="w-10 h-10 rounded border-2 border-slate-500 bg-slate-700 flex items-center justify-center text-slate-400 text-sm" style={{ fontFamily: '"Press Start 2P", cursive' }}>?</div>

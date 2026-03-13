@@ -70,18 +70,18 @@
 }
 
 .arcade-title {
-  font-size: 1.8rem;
+  font-size: 2.1rem;
   font-weight: 700;
-  letter-spacing: 0.2em;
-  color: #fef08a;
-  text-shadow:
-    0 0 6px #fbbf24,
-    0 0 12px #f59e0b,
-    2px 2px 0 #ea580c,
-    3px 3px 0 #1c1917,
-    -1px -1px 0 #1c1917,
-    1px 1px 0 #1c1917,
-    0 0 0 2px #1c1917;
+  letter-spacing: 0.05em;
+  color: #f9db57;
+  -webkit-text-stroke: 1.5px #e0a340;
+  animation: gradient-pulse 2s ease-in-out infinite;
+}
+
+@keyframes gradient-pulse {
+  0% { text-shadow: 4px 2px 0 #e74de2; }
+  50% { text-shadow: 4px 2px 0 #aa40e0; }
+  100% { text-shadow: 4px 2px 0 #e74de2; }
 }
 
 :root {

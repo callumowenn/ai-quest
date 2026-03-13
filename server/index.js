@@ -1,7 +1,7 @@
 /**
- * Local API: 7-turn story engine (1 opening + 6 choice turns; turn 7 = final summary).
- * - /generate (prompt: start) -> init state, build opening prompt, call Ollama, return { narrative, options }
- * - /turn -> update state, build turn prompt, call Ollama, return { narrative, options [, finalSummary ] }
+ * Local API: 7-turn story engine. Turn 1 = opening (Phase 1); turns 2–6 = choice responses (phase 1,2,2,3,3); turn 7 = final summary.
+ * - /generate (prompt: start) -> init state, build turn 1 prompt, call Ollama, return { narrative, options }
+ * - /turn -> update state, build turn N prompt (N=2..6), call Ollama, return { narrative, options [, finalSummary ] }
  *
  * Run: node server/index.js   or   npm run server
  * Default port: 3001
@@ -11,55 +11,155 @@ import http from 'http'
 const OLLAMA_URL = 'http://Cals-Macbook-Pro.local:11434/api/generate'
 const DEFAULT_OLLAMA_MODEL = 'llam3dot-8b-storyengine'
 const PORT = 3001
-const TOTAL_TURNS = 7
+const TOTAL_TURNS = 6
 const MAX_NARRATIVE_WORDS = 80
-const MAX_OPTION_WORDS = 15
+const MAX_OPTION_WORDS = 8
+const MAX_DIALOGUE_LINES = 5
+const LAST_EXCHANGE_MAX_WORDS = 50
 
 const DEFAULT_STARTER_TEXT = 'Jimmy has an essay due in 24 hours and is conflicted about whether to use AI.'
 
-const DIALOGUE_REMINDER = `IMPORTANT: The story must be ENTIRELY DIALOGUE—no narration or description. Use very simple words, short sentences, for children with lower literacy. Every line must be from exactly one speaker: Jimmy, Priya, or Prof Kim. Format each line as: SPEAKER: what they say (e.g. JIMMY: Hi! or PRIYA: Let's use AI.).`
+const DIALOGUE_REMINDER = `IMPORTANT: The story must be ENTIRELY DIALOGUE—no narration or description. Use very simple words, short sentences, for children with lower literacy, but keep it light and engaging. Every line must be from exactly one speaker: Jimmy, Priya, or Prof Kim. Format each line as: SPEAKER: what they say (e.g. JIMMY: Hi! or PRIYA: Let's use AI.). Maximum ${MAX_DIALOGUE_LINES} lines of dialogue before (ESSENTIAL) finishing with A, B, C options.`
 
-// Editable prompt templates – tweak these to change LLM behaviour without touching logic.
-function buildOpeningPrompt(name, starterText) {
-  const friendName = name === 'Jimmy' ? 'Priya' : 'Jimmy'
-  return `You are writing the opening scene (turn 1 of ${TOTAL_TURNS}) of an interactive story for children. Use simple words and short sentences.
-
-${DIALOGUE_REMINDER}
-
-SETUP: ${name} is the protagonist. ${friendName} is their friend. Phase 1: 24 hours before the essay deadline. ${friendName} is tempting ${name} to use AI. Story context: "${starterText}"
-
-Write ONLY dialogue. Each line must be: JIMMY: ... or PRIYA: ... (no other speakers in this scene). One line per speech. Then a blank line, then the three choices the protagonist could say next:
-A: [one short line of dialogue, pro-AI]
-B: [one short line of dialogue, anti-AI]
-C: [one short line of dialogue, funny or silly, different from A and B]
-Maximum ${MAX_OPTION_WORDS} words per option. Output format: dialogue lines, then blank line, then A: ... B: ... C: ...`
+// ========== Prompt outline – edit these to control each turn ==========
+const PROMPT_OUTLINES = {
+  /** Character traits – included so the LLM keeps voices consistent. */
+  characterContext: {
+    friend: 'The friend is pro-AI and tempts the protagonist to use it.',
+    profKim: 'Professor Kim encourages thinking critically and values independent work.',
+  },
+  // turn1 = opening (Phase 1). turn2 = 1st choice response (Phase 1). turn3 = 2nd choice (Phase 2). turn4 = 3rd choice (Phase 2). turn5 = 4th choice (Phase 3). turn6 = 5th choice (Phase 3).
+  turn1: {
+    scene: `Turn 1, Phase 1. Daytime, 24 hours before the essay deadline. Protagonist and friend only.`,
+    task: (name, friendName) => `Opening dialogue. ${friendName} tempts ${name} to use AI for the essay, even though it is not recommended. ${name} is considering it. They have a brief conversation (3 or 4 dialogue lines, must end with a question or statement from ${friendName}). Then offer three concise dialogue choices A/B/C for ${name} to say in coversation.`,
+    outputFormat: `Write ONLY dialogue. Maximum ${MAX_DIALOGUE_LINES} lines. JIMMY: ... or PRIYA: ... only. One line per speech. Then blank line, then A: ... B: ... C: ...`,
+  },
+  turn2: {
+    scene: 'Turn 2, Phase 1. 24h to deadline. Protagonist must decide whether to use AI for the essay from one of the three options (A, B, C).',
+    task: ({ name, friendName }) =>
+      `continuing the conversation, ${friendName} replies to ${name}, and they have a brief conversation (3 or 4 dialogue lines). Then it MUST offer a critical decision (action, not dialogue) for ${name} to make: A: Generate the essay with AI, B: Write the essay without AI, C: Do something silly and unrelated to the essay.`,
+    outputFormat: `Use format JIMMY: ... or PRIYA: ... only. One line per speech. Then blank line, then, essentially, A: ... B: ... C: ... Keep each option to a few words (max ${MAX_OPTION_WORDS}).`,
+  },
+  turn3: {
+    scene: 'Turn 3, Phase 2. New scene. Deadline day, more urgent, now only 2 hours until deadline. Protagonist and friend are discussing whether the protagonist should use AI for one final check of the essay.',
+    task: ({ name, friendName, decisions }) =>
+      `Hectic conversation (3 or 4 dialogue lines) between ${name} and ${friendName} as deadline approaches. ${decisions.phase1UsedAI ? `${name} used AI for the essay, and is feeling smug and well-rested.` : `${name} did not not use AI for the essay, so is feeling tired but proud.`} Then offer three thoughtful dialogue choices:  A (AI-positive), B (AI-negative), or C (silly, unrelated) for ${name} to say in coversation.`,
+    outputFormat: `Use format JIMMY: ... or PRIYA: ... only. One line per speech. Then blank line, then A: ... B: ... C: ... Keep each option to a few words (max ${MAX_OPTION_WORDS}).`,
+  },
+  turn4: {
+    scene: 'Turn 4, Phase 2. Deadline day, urgent, now only 2 hours to deadline. Protagonist and friend are discussing whether the protagonist should use AI for one final check of the essay.',
+    task: ({ name, friendName }) =>
+      `${friendName} replies to ${name}, continuing the hectic conversation about whether to use AI for a last-minute check of the essay (at most 5 dialogue lines). Then offer a critical decision (action, not dialogue) for ${name} to make: A: Use AI to check the essay, B: Check the essay without AI, C: Do something silly and unrelated to the essay.`,
+    outputFormat: `Use format JIMMY: ... or PRIYA: ... only. One line per speech. Then blank line, then A: ... B: ... C: ... Keep each option to a few words (max ${MAX_OPTION_WORDS}).`,
+  },
+  turn5: {
+    scene: 'Turn 5, Phase 3. Two weeks after deadline, essay graded, getting feedback from Professor Kim. Roughly 5 dialogue lines.',
+    task: ({ name, decisions }) =>
+      `${decisions.phase1UsedAI ? `${decisions.phase2UsedAICheck ? `${name} has used AI to write and check the essay - Professor Kim is very angry in conversation, around 5 dialogue lines. Then offer three dialogue choices for ${name}: A: defends themself, B: doubts themself and apologises, C: laughs and jokes about it` : `${name} used AI to write the essay, but checked it manually - Professor Kim is suspicious and questions ${name}, around 5 dialogue lines. Then offer three dialogue choices for ${name}: A: defends themself, B: doubts themself, apologises, C: laughs and jokes about it`}` : `${decisions.phase2UsedAICheck ? `${name} wrote the essay themself but checked the essay with AI - Professor Kim notices some strange content and questions ${name}, around 5 dialogue lines. Then offer three dialogue choices for ${name}: A: defend themself, B: doubts themself, apologises, C: laughs and jokes about it` : `${name} wrote the essay themself and checked it manually - Professor Kim is proud and congratulates ${name}!, around 5 dialogue lines. Then offer three dialogue choices for ${name}: A: ponder whether AI might have helped, B: show pride, C: laughs and jokes about it`}`}`,
+    outputFormat: `Use format JIMMY: ... or PROF KIM: ... only. One line per speech. Then blank line, then A: ... B: ... C: ... Keep each option to a few words (max ${MAX_OPTION_WORDS}).`,
+  },
+  turn6: {
+    scene: 'Turn 6, Phase 3. Two weeks after deadline, essay graded, getting feedback from Professor Kim. At most 5 dialogue lines.',
+    task: ({ name }) =>
+      `${decisions.phase1UsedAI ? `${decisions.phase2UsedAICheck ? `${name} has used AI to write and check the essay - Professor Kim is very angry in conversation, around 5 dialogue lines. Then offer three dialogue choices for ${name}: A: defends themself, B: doubts themself and apologises, C: laughs and jokes about it` : `${name} used AI to write the essay, but checked it manually - Professor Kim is suspicious and questions ${name}, around 5 dialogue lines. Then offer three dialogue choices for ${name}: A: defends themself, B: doubts themself, apologises, C: laughs and jokes about it`}` : `${decisions.phase2UsedAICheck ? `${name} wrote the essay themself but checked the essay with AI - Professor Kim notices some strange content and questions ${name}, around 5 dialogue lines. Then offer three dialogue choices for ${name}: A: defend themself, B: doubts themself, apologises, C: laughs and jokes about it` : `${name} wrote the essay themself and checked it manually - Professor Kim is proud and congratulates ${name}!, around 5 dialogue lines. Then offer three dialogue choices for ${name}: A: ponder whether AI might have helped, B: show pride, C: laughs and jokes about it`}`}. Close the conversation between ${name} and Professor Kim with at most 5 dialogue lines. Then offer three reflective dialogue choices for ${name} to say in coversation: A: reflect on how good AI can be, B: reflect on how good it is to use your own brain, C: laughs and jokes about something random`,
+    outputFormat: `Use format JIMMY: ... or PROF KIM: ... only. One line per speech. Then blank line, then A: ... B: ... C: ... Keep each option to a few words (max ${MAX_OPTION_WORDS}).`,
+  },
+  finalSummary: {
+    role: (name) => `You are Professor Kim giving brief feedback to ${name} after their essay quest.`,
+    rules: `Output exactly ONE line in this format:\nPROF KIM: "your feedback here"\nRules: Write in second person ("you"). One short sentence only (max 15 words). Simple words for children. Congratulate or gently reflect. No story recap, no A/B/C options.`,
+  },
 }
 
-function buildTurnPromptTemplate(turn, phase, choice, state, phaseContext, d) {
-  const friendName = state.name === 'Jimmy' ? 'Priya' : 'Jimmy'
-  let sceneNote = ''
-  if (phase === 3) {
-    sceneNote = `This is the final scene: only ${state.name} and Professor Kim. No ${friendName}.`
-  } else {
-    sceneNote = `In this scene the characters are ${state.name} (protagonist) and ${friendName} (friend).`
+// ========== Lean context – bounded context for each turn (no full story) ==========
+/** Returns a one-line hint so the LLM can reflect protagonist personality from choices so far. */
+function getProtagonistTendency(state) {
+  const a = state.choiceCounts.A || 0
+  const b = state.choiceCounts.B || 0
+  const c = state.choiceCounts.C || 0
+  const total = a + b + c
+  if (total === 0) return 'Protagonist is neutral (no choices yet).'
+  const max = Math.max(a, b, c)
+  const leaders = [a === max && 'A', b === max && 'B', c === max && 'C'].filter(Boolean)
+  if (leaders.length > 1) return "Protagonist's choices are mixed so far; keep their tone balanced."
+  if (a === max) return 'Protagonist has chosen mostly pro-AI (A) so far; their dialogue should sound a bit more pro-AI.'
+  if (b === max) return 'Protagonist has chosen mostly anti-AI (B) so far; their dialogue should sound a bit more anti-AI.'
+  return 'Protagonist has chosen mostly funny/silly (C) so far; their dialogue should sound a bit more playful or silly.'
+}
+
+function getLeanContext(state, turn) {
+  const phase = getPhaseFromTurn(turn)
+  const a = state.choiceCounts.A || 0
+  const b = state.choiceCounts.B || 0
+  const c = state.choiceCounts.C || 0
+  let recap = `Phase ${phase}. A=${a} B=${b} C=${c}.`
+  if (phase >= 2 && state.decisions.phase1UsedAI != null) {
+    recap += state.decisions.phase1UsedAI ? ' Used AI in phase 1.' : ' Did not use AI in phase 1.'
   }
-  return `Story so far:
-${state.storySummary}
+  if (phase === 3) {
+    recap += state.decisions.phase3ProfessorProud !== false ? ' Kim proud.' : ' Kim scolding.'
+  }
+  const friendName = state.name === 'Jimmy' ? 'Priya' : 'Jimmy'
+  if (phase <= 2) recap += ` ${state.name} with ${friendName}.`
+  else recap += ` ${state.name} with Professor Kim.`
+  const lastChosen = state.lastChosenOption && state.lastChosenOption.text
+    ? `${state.lastChosenOption.key}: ${state.lastChosenOption.text}`
+    : '(no previous choice text available)'
+  return { lastChosenOption: lastChosen, recap }
+}
 
----
-Turn ${turn} of ${TOTAL_TURNS}. Phase ${phase}. ${sceneNote}
-Context: ${phaseContext}
+// ========== Build prompts from outline (no full storySummary in turn prompts) ==========
+/** Turn 1 = opening scene (Phase 1). Uses PROMPT_OUTLINES.turn1. */
+function buildTurn1Prompt(name, starterText) {
+  const friendName = name === 'Jimmy' ? 'Priya' : 'Jimmy'
+  const o = PROMPT_OUTLINES.turn1
+  const chars = PROMPT_OUTLINES.characterContext
+  const taskStr = typeof o.task === 'function' ? o.task(name, friendName, starterText) : o.task
+  return `Interactive story for children. Use simple words and short sentences. Produce dialogue and then three options A, B, C for optional dialogue for ${name} to say in coversation.
+${DIALOGUE_REMINDER}
 
-Player just chose ${choice} (${choice === 'A' ? 'pro-AI' : choice === 'B' ? 'anti-AI' : 'funny/silly'}).
-Choice counts: A=${state.choiceCounts.A}, B=${state.choiceCounts.B}, C=${state.choiceCounts.C}.
+${o.scene}
+${taskStr}
+
+${o.outputFormat}`
+}
+
+function buildTurnPrompt(turn, leanContext, choice, state) {
+  // Turn 2 = 1st choice response, turn 3 = 2nd choice, ... turn 6 = 5th choice. Use outline turnN for server turn N.
+  const key = `turn${turn}` in PROMPT_OUTLINES ? `turn${turn}` : 'turn2'
+  const o = PROMPT_OUTLINES[key]
+  const name = state.name || 'Jimmy'
+  const friendName = name === 'Jimmy' ? 'Priya' : 'Jimmy'
+  const phase = getPhaseFromTurn(turn)
+  const ctx = {
+    name,
+    friendName,
+    turn,
+    phase,
+    decisions: state.decisions,
+    choiceCounts: state.choiceCounts,
+    leanContext,
+  }
+  const sceneStr = typeof o.scene === 'function' ? o.scene(ctx) : o.scene
+  const taskStr = typeof o.task === 'function' ? o.task(ctx) : o.task
+  const choiceLabel = choice === 'A' ? 'pro-AI' : choice === 'B' ? 'anti-AI' : 'funny/silly'
+  const chars = PROMPT_OUTLINES.characterContext
+  const allowedSpeakers = phase <= 2
+    ? `ONLY JIMMY and PRIYA in this scene. Do NOT use PROF KIM — she is not present yet.`
+    : `ONLY PROF KIM AND ${name} in this scene.`
+  const characterTraits = phase <= 2 ? `Character: ${chars.friend}` : `Character: ${chars.profKim}`
+  const protagonistTendency = getProtagonistTendency(state)
+  return `${sceneStr}
+  ${name} just chose: ${leanContext.lastChosenOption} (${choiceLabel}).
+
+${taskStr}
+
+${allowedSpeakers}
+${characterTraits}
+Protagonist tendency: ${protagonistTendency}
 
 ${DIALOGUE_REMINDER}
 
-Write ONLY dialogue in reply to that choice. Use format: JIMMY: ... or PRIYA: ... or PROF KIM: ... (only these three names). One line per speech. Then a blank line, then the next three options (lines the protagonist could say):
-A: [short dialogue line, pro-AI]
-B: [short dialogue line, anti-AI]
-C: [short dialogue line, funny/silly]
-Max ${MAX_OPTION_WORDS} words per option.`
+${o.outputFormat}`
 }
 
 function buildFinalSummaryPromptTemplate(state) {
@@ -68,17 +168,14 @@ function buildFinalSummaryPromptTemplate(state) {
   const c = state.choiceCounts.C || 0
   const kimMood = state.decisions.phase3ProfessorProud ? 'proud' : 'scolding'
   const name = state.name || 'the player'
-  return `You are Professor Kim giving brief feedback to ${name} after their essay quest.
+  const o = PROMPT_OUTLINES.finalSummary
+  const chars = PROMPT_OUTLINES.characterContext
+  return `${o.role(name)}
 
+Character: ${chars.profKim}
 Choice counts: Pro-AI (A)=${a}, Anti-AI (B)=${b}, Silly (C)=${c}. Professor Kim is ${kimMood}.
 
-Output exactly ONE line in this format:
-PROF KIM: "your feedback here"
-
-Rules:
-- Write in second person ("you"). Address the player directly.
-- One short sentence only (max 15 words). Simple words for children.
-- Congratulate or gently reflect on what they did. No story recap, no A/B/C options.`
+${o.rules}`
 }
 
 // Single-session game state
@@ -99,6 +196,7 @@ function resetState(body = {}) {
     },
     name,
     starterText,
+    lastChosenOption: null,
   }
   return gameState
 }
@@ -122,9 +220,9 @@ function getPhaseContext(turn, phase, decisions) {
 }
 
 function truncateToWords(text, maxWords) {
+  // No truncation – keep full text as returned by the model.
   if (!text || typeof text !== 'string') return ''
-  const words = text.trim().split(/\s+/).filter(Boolean)
-  return words.slice(0, maxWords).join(' ')
+  return String(text)
 }
 
 /** Parse "SPEAKER: text" lines into dialogue array. Normalizes speaker to Jimmy | Priya | Professor Kim. */
@@ -161,12 +259,12 @@ function parseStructuredResponse(rawText) {
     if (match) {
       foundBlank = true
       const key = match[1].toUpperCase()
-      options[key] = truncateToWords(match[2].trim(), MAX_OPTION_WORDS) || fallbackOptions[key]
+      options[key] = match[2].trim() || fallbackOptions[key]
     } else if (!foundBlank) {
       if (line) narrativeParts.push(line)
     }
   }
-  const narrative = truncateToWords(narrativeParts.join(' '), MAX_NARRATIVE_WORDS)
+  const narrative = narrativeParts.join(' ')
   const dialogue = parseDialogueFromText(rawText)
   return {
     narrative,
@@ -244,12 +342,16 @@ async function handleGenerate(req, res) {
   const { name, starterText } = gameState
   console.log('[handleGenerate] state reset: name=', name, 'starterText=', starterText)
 
-  const fullPrompt = buildOpeningPrompt(name, starterText)
+  const fullPrompt = buildTurn1Prompt(name, starterText)
 
-  console.log('[handleGenerate] calling Ollama with opening prompt (length=', fullPrompt.length, ')')
+  console.log('[handleGenerate] --- PROMPT TO MODEL (turn 1) ---')
+  console.log(fullPrompt)
+  console.log('[handleGenerate] --- END PROMPT (chars=', fullPrompt.length, ') ---')
   try {
     const { text } = await callOllama(fullPrompt)
-    console.log('[handleGenerate] Ollama response text length:', text?.length ?? 0)
+    console.log('[handleGenerate] --- RESPONSE FROM MODEL ---')
+    console.log(text ?? '')
+    console.log('[handleGenerate] --- END RESPONSE (chars=', text?.length ?? 0, ') ---')
     gameState.storySummary = text
     gameState.turn = 1
     const structured = parseStructuredResponse(text)
@@ -277,6 +379,7 @@ async function handleTurn(req, res) {
 
   const choice = body.choice && ['A', 'B', 'C'].includes(String(body.choice).toUpperCase()) ? String(body.choice).toUpperCase() : null
   const paragraph = body.paragraph != null ? String(body.paragraph) : (body.narrative != null ? String(body.narrative) : '')
+  const chosenOptionText = body.chosenOptionText != null ? String(body.chosenOptionText) : ''
 
   if (!choice) {
     sendJson(res, 400, { error: 'Missing or invalid choice (A, B, or C)' })
@@ -295,6 +398,7 @@ async function handleTurn(req, res) {
 
   const state = gameState
   state.choiceCounts[choice] = (state.choiceCounts[choice] || 0) + 1
+  state.lastChosenOption = { key: choice, text: chosenOptionText }
   state.turn += 1
   const turn = state.turn
   const phase = getPhaseFromTurn(turn)
@@ -335,17 +439,20 @@ async function handleTurn(req, res) {
     return
   }
 
-  const phaseContext = getPhaseContext(turn, phase, state.decisions)
-  const d = state.decisions
+  const leanContext = getLeanContext(state, turn)
+  const turnPrompt = buildTurnPrompt(turn, leanContext, choice, state)
 
-  const turnPrompt = buildTurnPromptTemplate(turn, phase, choice, state, phaseContext, d)
-
-  console.log('[handleTurn] calling Ollama for turn', turn, '(prompt length=', turnPrompt.length, ')')
+  console.log('[handleTurn] --- PROMPT TO MODEL (turn', turn, ') ---')
+  console.log(turnPrompt)
+  console.log('[handleTurn] --- END PROMPT (chars=', turnPrompt.length, ') ---')
   try {
     const { text } = await callOllama(turnPrompt)
-    console.log('[handleTurn] Ollama response text length:', text?.length ?? 0)
+    console.log('[handleTurn] --- RESPONSE FROM MODEL ---')
+    console.log(text ?? '')
+    console.log('[handleTurn] --- END RESPONSE (chars=', text?.length ?? 0, ') ---')
     state.storySummary = state.storySummary ? state.storySummary + '\n\n' + text : text
     const structured = parseStructuredResponse(text)
+    console.log('[handleTurn] parsed:', JSON.stringify({ dialogue: structured.dialogue?.length, options: structured.options }, null, 2))
     sendJson(res, 200, structured)
   } catch (err) {
     console.error('[handleTurn]', err.message)
@@ -372,9 +479,14 @@ async function handleSummary(req, res) {
   }
   const state = gameState
   const promptText = buildFinalSummaryPromptTemplate(state)
-  console.log('[handleSummary] calling Ollama for final summary (prompt length=', promptText.length, ')')
+  console.log('[handleSummary] --- PROMPT TO MODEL (final summary) ---')
+  console.log(promptText)
+  console.log('[handleSummary] --- END PROMPT (chars=', promptText.length, ') ---')
   try {
     const { text } = await callOllama(promptText)
+    console.log('[handleSummary] --- RESPONSE FROM MODEL ---')
+    console.log(text ?? '')
+    console.log('[handleSummary] --- END RESPONSE (chars=', text?.length ?? 0, ') ---')
     state.storySummary = state.storySummary ? state.storySummary + '\n\n' + text : text
     state.turn = 7
     const structured = parseStructuredResponse(text)
