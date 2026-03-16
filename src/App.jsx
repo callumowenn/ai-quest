@@ -13,7 +13,7 @@ const MAX_ROUNDS = 8
 const TYPEWRITER_MS_PER_CHAR = 30
 const DEFAULT_STARTER_JIMMY = 'Jimmy has an essay due in 24 hours and is conflicted about whether to use AI... can you help him?'
 const DEFAULT_STARTER_PRIYA = 'Priya has an essay due in 24 hours and is conflicted about whether to use AI... can you help her?'
-const START_BUTTON_LABEL = 'press C to begin'
+const START_BUTTON_LABEL = 'Press C to begin'
 const CHUNK_CHARS = 150
 const STEPS = 7
 
@@ -32,6 +32,7 @@ function App() {
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(false)
   const [finalLoading, setFinalLoading] = useState(false)
+  const [finalLoadingDots, setFinalLoadingDots] = useState(0)
   const [error, setError] = useState(null)
   const [displayedLength, setDisplayedLength] = useState(0)
   const [chunkIndex, setChunkIndex] = useState(0)
@@ -53,6 +54,9 @@ function App() {
   const loadingStartedRef = useRef(false)
   const phase2ShownRef = useRef(false)
   const phase3ShownRef = useRef(false)
+  const [choiceFeedback, setChoiceFeedback] = useState(null) // { key: 'A'|'B'|'C', options: { A, B, C } } for ~1s after choice
+  const [choiceFeedbackFaded, setChoiceFeedbackFaded] = useState(false) // true after a tick so non-chosen can transition to opacity 0
+  const choiceFeedbackTimeoutsRef = useRef([])
 
   const lastEntry = history.length > 0 ? history[history.length - 1] : null
   const hasStructured = lastEntry && (lastEntry.narrative != null || (lastEntry.options && (lastEntry.options.A != null || lastEntry.options.B != null)))
@@ -232,6 +236,14 @@ function App() {
     return () => clearInterval(id)
   }, [loading])
 
+  useEffect(() => {
+    if (!finalLoading) return
+    const id = setInterval(() => {
+      setFinalLoadingDots((d) => (d + 1) % 4)
+    }, 400)
+    return () => clearInterval(id)
+  }, [finalLoading])
+
   const sendTurn = useCallback(async (choice, narrative, chosenOptionText) => {
     setLoading(true)
     setError(null)
@@ -246,19 +258,27 @@ function App() {
       if (data.error) throw new Error(data.error)
       const { narrative: nextNarrative, options: nextOptions, finalSummary, dialogue: nextDialogue } = data
       if (finalSummary) {
-        setFinalLoading(true)
+        // Delay showing the Professor Kim loading screen until after the choice fade animation (~1.1s)
         setTimeout(() => {
-          setHistory((prev) => {
-            const next = [...prev]
-            const entry = { narrative: nextNarrative, options: nextOptions ?? {}, finalSummary: true, dialogue: Array.isArray(nextDialogue) ? nextDialogue : [] }
-            if (next.length > 0 && next[next.length - 1].choice === choice && next[next.length - 1].narrative === undefined) {
-              next[next.length - 1] = { ...next[next.length - 1], ...entry }
-              return next
-            }
-            return [...prev, { choice, ...entry }].slice(-MAX_ROUNDS)
-          })
-          setFinalLoading(false)
-        }, 2000)
+          setFinalLoading(true)
+          setTimeout(() => {
+            setHistory((prev) => {
+              const next = [...prev]
+              const entry = {
+                narrative: nextNarrative,
+                options: nextOptions ?? {},
+                finalSummary: true,
+                dialogue: Array.isArray(nextDialogue) ? nextDialogue : [],
+              }
+              if (next.length > 0 && next[next.length - 1].choice === choice && next[next.length - 1].narrative === undefined) {
+                next[next.length - 1] = { ...next[next.length - 1], ...entry }
+                return next
+              }
+              return [...prev, { choice, ...entry }].slice(-MAX_ROUNDS)
+            })
+            setFinalLoading(false)
+          }, 4000)
+        }, 1100)
       } else {
         setHistory((prev) => {
           const next = [...prev]
@@ -353,7 +373,17 @@ function App() {
       const last = history[history.length - 1]
       const narrative = last.narrative ?? ''
       const chosenOptionText = latestOptions && latestOptions[choice] ? latestOptions[choice] : ''
+      choiceFeedbackTimeoutsRef.current.forEach(clearTimeout)
+      choiceFeedbackTimeoutsRef.current = []
+      setChoiceFeedback({ key: choice, options: latestOptions ? { ...latestOptions } : { A: '', B: '', C: '' } })
+      setChoiceFeedbackFaded(false)
       setHistory((prev) => [...prev, { choice }].slice(-MAX_ROUNDS))
+      const startFadeId = setTimeout(() => setChoiceFeedbackFaded(true), 50)
+      const clearId = setTimeout(() => {
+        setChoiceFeedback(null)
+        setChoiceFeedbackFaded(false)
+      }, 1100)
+      choiceFeedbackTimeoutsRef.current = [startFadeId, clearId]
       await sendTurn(choice, narrative, chosenOptionText)
     },
     [history, loading, sendTurn, latestOptions]
@@ -372,6 +402,7 @@ function App() {
 
   const isEndOfStory = history.length >= MAX_ROUNDS || (history.length >= 7 && lastEntry?.finalSummary === true)
   const isFinalSummary = lastEntry?.finalSummary === true
+  const canChoose = history.length > 0 && history.length < 7 && !loading && !isEndOfStory && showingAllChunks && latestOptions && Object.keys(latestOptions).length > 0 && !isFinalSummary
 
   useLayoutEffect(() => {
     if (loading || isFinalSummary) return
@@ -425,16 +456,14 @@ function App() {
         return
       }
       if (loading || history.length >= 7) return
-      if (key === 'A' || key === 'B' || key === 'C') {
+      if ((key === 'A' || key === 'B' || key === 'C') && canChoose) {
         e.preventDefault()
         handleChoice(key)
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [loading, history.length, selectedCharacter, showingStarterIntro, introTypewriterDone, handleChoice, showContinuePrompt, handleAnyKeyOrClick, sendBeginQuest, isEndOfStory, isFinalSummary, pendingPhaseTransition, transitionTypewriterDone])
-
-  const canChoose = history.length > 0 && history.length < 7 && !loading && !isEndOfStory && showingAllChunks && latestOptions && Object.keys(latestOptions).length > 0 && !isFinalSummary
+  }, [loading, history.length, selectedCharacter, showingStarterIntro, introTypewriterDone, handleChoice, showContinuePrompt, handleAnyKeyOrClick, sendBeginQuest, isEndOfStory, isFinalSummary, pendingPhaseTransition, transitionTypewriterDone, canChoose])
 
   const choiceCounts = history.reduce((acc, entry) => {
     if (entry.choice === 'A' || entry.choice === 'B' || entry.choice === 'C') {
@@ -602,7 +631,7 @@ function App() {
                 className="shrink-0 text-amber-200/80 text-[10px] lowercase border-0 p-0 cursor-pointer hover:text-amber-400 mb-0.5 w-full text-center"
                 style={{ fontFamily: '"Press Start 2P", cursive' }}
               >
-                [press any key to continue]
+                press any key to continue
               </span>
             )}
           </div>
@@ -611,15 +640,43 @@ function App() {
         {finalLoading && (
           <div className="flex-1 flex flex-col items-center justify-center gap-2 min-h-0 py-2">
             <p className="text-amber-200/95 text-xs bg-slate-900/50 px-1 py-0.5 rounded-md leading-tight whitespace-pre-wrap break-words m-0 text-center max-w-80 px-2" style={{ fontFamily: '"Press Start 2P", cursive' }}>
-              Professor Kim is thinking about your choices...
+              Professor Kim is thinking about your choices!
             </p>
             <p className="text-amber-400/90 text-[10px] lowercase flex-none bg-slate-900/50 px-1 py-0.5 rounded-md" style={{ fontFamily: '"Press Start 2P", cursive' }}>
-              loading summary...
+              loading summary{'.'.repeat(finalLoadingDots)}
             </p>
           </div>
         )}
 
-        {loading && !finalLoading && (
+        {choiceFeedback && (
+          <div className="flex-1 flex flex-col gap-0.5 py-1 justify-start pt-4">
+            <span className="shrink-0 text-amber-400/80 text-[10px] lowercase w-full text-end" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+              you chose!
+            </span>
+            <div className="flex flex-wrap gap-1 ml-0 mt-1">
+              {['A', 'B', 'C'].map((key) => {
+                const bgColor = key === 'A' ? '#ffafe4' : key === 'B' ? '#7de2f4' : '#4bf296'
+                const isChosen = key === choiceFeedback.key
+                const shouldFade = !isChosen && choiceFeedbackFaded
+                return (
+                  <div
+                    key={key}
+                    className={`flex gap-1 w-[420px] transition-opacity duration-[1000ms] ease-out ${shouldFade ? 'opacity-0' : 'opacity-100'}`}
+                  >
+                    <div className="w-full text-[10px] rounded-md px-2 py-2 border border-black backdrop-blur-lg" style={{ fontFamily: '"Press Start 2P", cursive', color: '#000000', backgroundColor: `${bgColor}` }}>
+                      {choiceFeedback.options[key] ?? ''}
+                    </div>
+                    <div className="text-[16px] rounded-md w-14 h-12 flex items-center justify-center" style={{ fontFamily: '"Press Start 2P", cursive', color: bgColor, backgroundColor: '#000' }}>
+                      {key}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {loading && !finalLoading && !choiceFeedback && (
           <div className="flex-1 flex flex-col items-center justify-center gap-2 min-h-0 py-2">
             <div className="speech-bubble flex-none px-3 py-2 max-w-80" style={{ opacity: loadingPhraseOpacity }}>
               <p className="text-amber-200/95 text-[9px] leading-tight whitespace-pre-wrap break-words m-0" style={{ fontFamily: '"Press Start 2P", cursive' }}>
@@ -647,7 +704,7 @@ function App() {
                 className="shrink-0 text-amber-300/80 bg-slate-900/70 text-nowrap w-min px-1 py-0.5 rounded-md text-[10px] lowercase border-0 p-0 cursor-pointer hover:text-amber-400 mb-0.5 w-full text-center"
                 style={{ fontFamily: '"Press Start 2P", cursive' }}
               >
-                [press any key to continue]
+                press any key to continue
               </span>
             )}
           </div>
@@ -736,10 +793,10 @@ function App() {
                       tabIndex={0}
                       onClick={handleAnyKeyOrClick}
                       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleAnyKeyOrClick() } }}
-                      className="shrink-0 text-amber-400/80 text-[10px] lowercase border-0 p-0 cursor-pointer hover:text-amber-400 mb-0.5 w-full text-center"
+                      className="shrink-0 absolute bottom-0 right-0 text-amber-400/80 text-[8px] bg-slate-900/50 py-0.5 rounded-md w-min text-nowrap lowercase border-0 p-0 cursor-pointer hover:text-amber-400 mb-0.5 text-center"
                       style={{ fontFamily: '"Press Start 2P", cursive' }}
                     >
-                      {/* [press any key to continue] */}
+                      press any key to continue
                     </span>
                   )}
                 </>
@@ -790,16 +847,15 @@ function App() {
                 </div>
               )}
             </div>
-            <span
-              role="button"
-              tabIndex={0}
+            <button
+              type="button"
               onClick={handleStartAgain}
               onKeyDown={(e) => { if (e.key === 'c' || e.key === 'C') { e.preventDefault(); handleStartAgain() } }}
-              className="shrink-0 text-amber-400/80 text-[10px] lowercase border-0 p-0 cursor-pointer hover:text-amber-400 text-center"
-              style={{ fontFamily: '"Press Start 2P", cursive' }}
+              className="text-[10px] font-bold py-2 px-3 text-slate-900 border-2 border-slate-700 hover:opacity-90 cursor-pointer mx-auto"
+              style={{ fontFamily: '"Press Start 2P", cursive', backgroundColor: '#4bf296' }}
             >
-              Press C to play again.
-            </span>
+              Press C to play again
+            </button>
           </div>
         )}
         {isEndOfStory && !canChoose && history.length > 0 && !isFinalSummary && (

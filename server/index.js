@@ -31,8 +31,8 @@ const PROMPT_OUTLINES = {
   // turn1 = opening (Phase 1). turn2 = 1st choice response (Phase 1). turn3 = 2nd choice (Phase 2). turn4 = 3rd choice (Phase 2). turn5 = 4th choice (Phase 3). turn6 = 5th choice (Phase 3).
   turn1: {
     scene: `Turn 1, Phase 1. Daytime, 24 hours before the essay deadline. Protagonist and friend only.`,
-    task: (name, friendName) => `Opening dialogue. ${friendName} tempts ${name} to use AI for the essay, even though it is not recommended. ${name} is considering it. They have a brief conversation (3 or 4 dialogue lines, must end with a question or statement from ${friendName}). Then offer three concise dialogue choices A/B/C for ${name} to say in coversation.`,
-    outputFormat: `Write ONLY dialogue. Maximum ${MAX_DIALOGUE_LINES} lines. JIMMY: ... or PRIYA: ... only. One line per speech. Then blank line, then A: ... B: ... C: ...`,
+    task: (name, friendName) => `Opening dialogue. ${friendName} tempts ${name} to use AI for the essay, even though it is not recommended. ${name} is considering it. They have a brief conversation (3 or 4 dialogue lines, must end with a question or statement from ${friendName}). Then you must return three concise dialogue choices A, B, or C for ${name} to say in coversation next.`,
+    outputFormat: `Write ONLY dialogue. Maximum ${MAX_DIALOGUE_LINES} lines. JIMMY: ... or PRIYA: ... only. One line per speech. Then blank line, then (THIS IS ESSENTIAL) the three options A: ... B: ... C: ... for next dialogue.`,
   },
   turn2: {
     scene: 'Turn 2, Phase 1. 24h to deadline. Protagonist must decide whether to use AI for the essay from one of the three options (A, B, C).',
@@ -60,7 +60,7 @@ const PROMPT_OUTLINES = {
   },
   turn6: {
     scene: 'Turn 6, Phase 3. Two weeks after deadline, essay graded, getting feedback from Professor Kim. At most 5 dialogue lines.',
-    task: ({ name }) =>
+    task: ({ name, decisions }) =>
       `${decisions.phase1UsedAI ? `${decisions.phase2UsedAICheck ? `${name} has used AI to write and check the essay - Professor Kim is very angry in conversation, around 5 dialogue lines. Then offer three dialogue choices for ${name}: A: defends themself, B: doubts themself and apologises, C: laughs and jokes about it` : `${name} used AI to write the essay, but checked it manually - Professor Kim is suspicious and questions ${name}, around 5 dialogue lines. Then offer three dialogue choices for ${name}: A: defends themself, B: doubts themself, apologises, C: laughs and jokes about it`}` : `${decisions.phase2UsedAICheck ? `${name} wrote the essay themself but checked the essay with AI - Professor Kim notices some strange content and questions ${name}, around 5 dialogue lines. Then offer three dialogue choices for ${name}: A: defend themself, B: doubts themself, apologises, C: laughs and jokes about it` : `${name} wrote the essay themself and checked it manually - Professor Kim is proud and congratulates ${name}!, around 5 dialogue lines. Then offer three dialogue choices for ${name}: A: ponder whether AI might have helped, B: show pride, C: laughs and jokes about it`}`}. Close the conversation between ${name} and Professor Kim with at most 5 dialogue lines. Then offer three reflective dialogue choices for ${name} to say in coversation: A: reflect on how good AI can be, B: reflect on how good it is to use your own brain, C: laughs and jokes about something random`,
     outputFormat: `Use format JIMMY: ... or PROF KIM: ... only. One line per speech. Then blank line, then A: ... B: ... C: ... Keep each option to a few words (max ${MAX_OPTION_WORDS}).`,
   },
@@ -425,10 +425,10 @@ async function handleTurn(req, res) {
     const total = a + b + c
     const aiUsageScore = total > 0 ? Math.round((a / total) * 100) : 0
     let phrase
-    if (aiUsageScore <= 25) phrase = 'Well done, strong independent human!'
-    else if (aiUsageScore <= 50) phrase = 'Good job, you showed a good balance between independence and using AI!'
-    else if (aiUsageScore <= 75) phrase = 'Nice try, you used some of your brain, but relied heavily on AI!'
-    else phrase = "Are you sure you're not an AI?"
+    if (aiUsageScore <= 25) phrase = 'Well done, strong independent human! You used your own brain and didn\'t rely on AI. That is the best way to learn! You should be proud of yourself.'
+    else if (aiUsageScore <= 50) phrase = 'Good job, you showed a good balance between independence and using AI! Can you try relying on your own intelligence even more next time?'
+    else if (aiUsageScore <= 75) phrase = 'Nice try, you used your own brain somewhat, but relied heavily on AI! Can you try relying on your own intelligence more next time?'
+    else phrase = "Are you sure you're not an AI? You relied very heavily on AI throughout the quest! Be careful not to become too dependent on it as it may negatively affect your learning over time."
     sendJson(res, 200, {
       narrative: '',
       options: {},
