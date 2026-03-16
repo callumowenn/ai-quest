@@ -225,12 +225,12 @@ function truncateToWords(text, maxWords) {
   return String(text)
 }
 
-/** Parse "SPEAKER: text" lines into dialogue array. Normalizes speaker to Jimmy | Priya | Professor Kim. */
+/** Parse "SPEAKER: text" lines into dialogue array. Normalizes speaker to Jimmy | Priya | Prof Kim. Accepts "Prof Kim" or "Professor Kim". */
 function parseDialogueFromText(rawText) {
   const dialogue = []
   if (!rawText || typeof rawText !== 'string') return dialogue
   const lines = rawText.split(/\n/).map((l) => l.trim())
-  const speakerRegex = /^(JIMMY|PRIYA|PROF KIM|Jimmy|Priya|Prof Kim):\s*(.*)$/i
+  const speakerRegex = /^(JIMMY|PRIYA|PROF KIM|PROFESSOR KIM|Jimmy|Priya|Prof Kim|Professor Kim):\s*(.*)$/i
   for (const line of lines) {
     const m = line.match(speakerRegex)
     if (m) {
