@@ -261,10 +261,10 @@ function App() {
     }
     const timeouts = []
     setMiniGameCountdownStage('ready')
-    timeouts.push(setTimeout(() => setMiniGameCountdownStage('3'), 1000))
-    timeouts.push(setTimeout(() => setMiniGameCountdownStage('2'), 2000))
-    timeouts.push(setTimeout(() => setMiniGameCountdownStage('1'), 3000))
-    timeouts.push(setTimeout(() => setMiniGameCountdownStage('go'), 4000))
+    timeouts.push(setTimeout(() => setMiniGameCountdownStage('3'), 750))
+    timeouts.push(setTimeout(() => setMiniGameCountdownStage('2'), 1500))
+    timeouts.push(setTimeout(() => setMiniGameCountdownStage('1'), 2250))
+    timeouts.push(setTimeout(() => setMiniGameCountdownStage('go'), 3000))
     return () => {
       timeouts.forEach((id) => clearTimeout(id))
     }
@@ -292,6 +292,7 @@ function App() {
     if (miniGameTimeLeft > 0) return
     if (miniGameSequence.length === 0) return
     if (!miniGameCompleted) {
+      setMiniGameLastFailed(true)
       setMiniGameIndex(0)
       setMiniGameAttemptId((id) => id + 1)
     }
@@ -305,7 +306,7 @@ function App() {
       setMiniGameCompleted(false)
       setMiniGameCountdownStage(null)
       setMiniGameLastFailed(false)
-    }, 500)
+    }, 750)
     return () => clearTimeout(id)
   }, [miniGameCompleted])
 
@@ -707,15 +708,18 @@ function App() {
             ) : (
               <>
                 <div className="flex flex-col items-center m-4">
-                  <p className="text-amber-200/95 text-[10px] mb-1 mx-12" style={{ fontFamily: '"Press Start 2P", cursive' }}>
-                    Manual mode! <br /> <br /> Hit the sequence to help finish the work.
-                  </p>
-                  {miniGameLastFailed && (
-                    <p className="text-rose-300 text-[9px] mb-1" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+                {miniGameLastFailed && (
+                    <p className="text-rose-300 text-[9px] absolute bottom-0 mb-2" style={{ fontFamily: '"Press Start 2P", cursive' }}>
                       not quite! try again...
                     </p>
                   )}
-                  <div className="mb-2 text-amber-300 text-xs" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+                <p className="text-amber-300/95 text-[14px] mb-1" style={{ fontFamily: '"Press Start 2P", cursive', color: '#7de2f4' }}>
+                    Manual mode! <br />
+                  </p>
+                  <p className="text-amber-200/95 text-[10px] mb-2 mx-12" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+                    Hit the sequence to help finish the work.
+                  </p>
+                  <div className="mb-2 text-amber-300 text-xs border-2 border-amber-400/60 rounded-full px-3 py-2" style={{ fontFamily: '"Press Start 2P", cursive' }}>
                     {miniGameCountdownStage === null && 'ready?'}
                     {miniGameCountdownStage === 'ready' && 'ready?'}
                     {miniGameCountdownStage === '3' && '3'}
@@ -916,10 +920,10 @@ function App() {
         {!pendingPhaseTransition && !isFinalSummary && !finalLoading && ((latestNarrative !== '' && !error && !loading) || (isPendingResponse && !loading)) && (
           <>
             {/* Options above: flex-1 so bar stays at bottom */}
-            <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+            <div className="flex-1 min-h-0 overflow-y-hidden flex flex-col">
               {canChoose && latestOptions && (
                 <div className="shrink-0 flex flex-col gap-0.5 py-1">
-                  <div className="flex flex-wrap gap-1 ml-0 mt-4">
+                  <div className="flex flex-wrap gap-1 ml-0 mt-0">
                   <span
               className="shrink-0 text-amber-400/80 text-[10px] lowercase border-0 p-0 cursor-pointer hover:text-amber-400 mb-0.5 w-full text-end"
               style={{ fontFamily: '"Press Start 2P", cursive' }}
