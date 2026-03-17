@@ -434,7 +434,12 @@ async function handleTurn(req, res) {
       options: {},
       finalSummary: true,
       dialogue: [{ speaker: 'Prof Kim', text: phrase }],
-      aiUsageScore
+      aiUsageScore,
+      phaseResults: {
+        usedAIToWrite: state.decisions.phase1UsedAI,
+        usedAIToCheck: state.decisions.phase2UsedAICheck,
+        professorProud: state.decisions.phase3ProfessorProud !== false,
+      },
     })
     return
   }

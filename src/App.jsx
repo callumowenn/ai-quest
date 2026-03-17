@@ -57,6 +57,14 @@ function App() {
   const [choiceFeedback, setChoiceFeedback] = useState(null) // { key: 'A'|'B'|'C', options: { A, B, C } } for ~1s after choice
   const [choiceFeedbackFaded, setChoiceFeedbackFaded] = useState(false) // true after a tick so non-chosen can transition to opacity 0
   const choiceFeedbackTimeoutsRef = useRef([])
+  const [miniGameActive, setMiniGameActive] = useState(false)
+  const [miniGameCompleted, setMiniGameCompleted] = useState(false)
+  const [miniGameCountdownStage, setMiniGameCountdownStage] = useState(null) // 'ready' | '3' | '2' | '1' | 'go' | null
+  const [miniGameSequence, setMiniGameSequence] = useState([])
+  const [miniGameIndex, setMiniGameIndex] = useState(0)
+  const [miniGameAttemptId, setMiniGameAttemptId] = useState(0)
+  const [miniGameTimeLeft, setMiniGameTimeLeft] = useState(5)
+  const [phaseResults, setPhaseResults] = useState(null)
 
   const lastEntry = history.length > 0 ? history[history.length - 1] : null
   const hasStructured = lastEntry && (lastEntry.narrative != null || (lastEntry.options && (lastEntry.options.A != null || lastEntry.options.B != null)))
@@ -244,6 +252,50 @@ function App() {
     return () => clearInterval(id)
   }, [finalLoading])
 
+  // Minigame countdown: ready -> 3 -> 2 -> 1 -> go
+  useEffect(() => {
+    if (!miniGameActive) {
+      setMiniGameCountdownStage(null)
+      return
+    }
+    const timeouts = []
+    setMiniGameCountdownStage('ready')
+    timeouts.push(setTimeout(() => setMiniGameCountdownStage('3'), 1000))
+    timeouts.push(setTimeout(() => setMiniGameCountdownStage('2'), 2000))
+    timeouts.push(setTimeout(() => setMiniGameCountdownStage('1'), 3000))
+    timeouts.push(setTimeout(() => setMiniGameCountdownStage('go'), 4000))
+    return () => {
+      timeouts.forEach((id) => clearTimeout(id))
+    }
+  }, [miniGameActive, miniGameAttemptId])
+
+  // Minigame timer: 5 seconds per attempt once countdown reaches "go"
+  useEffect(() => {
+    if (!miniGameActive || miniGameCountdownStage !== 'go') return
+    setMiniGameTimeLeft(5)
+    const start = Date.now()
+    const id = setInterval(() => {
+      const elapsed = (Date.now() - start) / 1000
+      const remaining = Math.max(0, 5 - elapsed)
+      setMiniGameTimeLeft(remaining)
+      if (remaining <= 0) {
+        clearInterval(id)
+      }
+    }, 100)
+    return () => clearInterval(id)
+  }, [miniGameActive, miniGameCountdownStage, miniGameAttemptId])
+
+  // When time runs out and sequence not completed, reset attempt
+  useEffect(() => {
+    if (!miniGameActive || miniGameCountdownStage !== 'go') return
+    if (miniGameTimeLeft > 0) return
+    if (miniGameSequence.length === 0) return
+    if (!miniGameCompleted) {
+      setMiniGameIndex(0)
+      setMiniGameAttemptId((id) => id + 1)
+    }
+  }, [miniGameTimeLeft, miniGameActive, miniGameCountdownStage, miniGameSequence.length, miniGameCompleted])
+
   const sendTurn = useCallback(async (choice, narrative, chosenOptionText) => {
     setLoading(true)
     setError(null)
@@ -256,8 +308,11 @@ function App() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       if (data.error) throw new Error(data.error)
-      const { narrative: nextNarrative, options: nextOptions, finalSummary, dialogue: nextDialogue } = data
+      const { narrative: nextNarrative, options: nextOptions, finalSummary, dialogue: nextDialogue, phaseResults: serverPhaseResults } = data
       if (finalSummary) {
+        if (serverPhaseResults) {
+          setPhaseResults(serverPhaseResults)
+        }
         // Delay showing the Professor Kim loading screen until after the choice fade animation (~1.1s)
         setTimeout(() => {
           setFinalLoading(true)
@@ -373,6 +428,19 @@ function App() {
       const last = history[history.length - 1]
       const narrative = last.narrative ?? ''
       const chosenOptionText = latestOptions && latestOptions[choice] ? latestOptions[choice] : ''
+      const isPotentialFinalTurn = history.length >= 6
+
+      // If player chooses B on a non-final turn, start the manual-work minigame
+      if (choice === 'B' && !isPotentialFinalTurn) {
+        const letters = ['A', 'B', 'C']
+        const sequenceLength = 8
+        const sequence = Array.from({ length: sequenceLength }, () => letters[Math.floor(Math.random() * letters.length)])
+        setMiniGameSequence(sequence)
+        setMiniGameIndex(0)
+        setMiniGameCompleted(false)
+        setMiniGameActive(true)
+        setMiniGameAttemptId((id) => id + 1)
+      }
       choiceFeedbackTimeoutsRef.current.forEach(clearTimeout)
       choiceFeedbackTimeoutsRef.current = []
       setChoiceFeedback({ key: choice, options: latestOptions ? { ...latestOptions } : { A: '', B: '', C: '' } })
@@ -404,6 +472,29 @@ function App() {
   const isFinalSummary = lastEntry?.finalSummary === true
   const canChoose = history.length > 0 && history.length < 7 && !loading && !isEndOfStory && showingAllChunks && latestOptions && Object.keys(latestOptions).length > 0 && !isFinalSummary
 
+  const handleMiniGameInput = useCallback(
+    (key) => {
+      if (!miniGameActive || miniGameCountdownStage !== 'go') return
+      if (!miniGameSequence || miniGameSequence.length === 0) return
+      const expected = miniGameSequence[miniGameIndex]
+      if (!expected) return
+      if (key === expected) {
+        const nextIndex = miniGameIndex + 1
+        setMiniGameIndex(nextIndex)
+        if (nextIndex >= miniGameSequence.length) {
+          setMiniGameCompleted(true)
+          setMiniGameActive(false)
+          setMiniGameCountdownStage(null)
+        }
+      } else {
+        // Wrong key: reset attempt
+        setMiniGameIndex(0)
+        setMiniGameAttemptId((id) => id + 1)
+      }
+    },
+    [miniGameActive, miniGameCountdownStage, miniGameSequence, miniGameIndex]
+  )
+
   useLayoutEffect(() => {
     if (loading || isFinalSummary) return
     if (pendingPhaseTransition) return
@@ -418,6 +509,15 @@ function App() {
 
   useEffect(() => {
     function onKeyDown(e) {
+      // Minigame has highest priority: route A/B/C to the sequence when active
+      if (miniGameActive) {
+        const key = e.key.toUpperCase()
+        if (miniGameCountdownStage === 'go' && (key === 'A' || key === 'B' || key === 'C')) {
+          e.preventDefault()
+          handleMiniGameInput(key)
+        }
+        return
+      }
       if (isEndOfStory && isFinalSummary && (e.key === 'c' || e.key === 'C')) {
         e.preventDefault()
         handleStartAgain()
@@ -463,7 +563,7 @@ function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [loading, history.length, selectedCharacter, showingStarterIntro, introTypewriterDone, handleChoice, showContinuePrompt, handleAnyKeyOrClick, sendBeginQuest, isEndOfStory, isFinalSummary, pendingPhaseTransition, transitionTypewriterDone, canChoose])
+  }, [loading, history.length, selectedCharacter, showingStarterIntro, introTypewriterDone, handleChoice, showContinuePrompt, handleAnyKeyOrClick, sendBeginQuest, isEndOfStory, isFinalSummary, pendingPhaseTransition, transitionTypewriterDone, canChoose, miniGameActive, miniGameCountdownStage, handleMiniGameInput])
 
   const choiceCounts = history.reduce((acc, entry) => {
     if (entry.choice === 'A' || entry.choice === 'B' || entry.choice === 'C') {
@@ -473,6 +573,9 @@ function App() {
   }, { A: 0, B: 0, C: 0 })
   const totalChoices = choiceCounts.A + choiceCounts.B + choiceCounts.C
   const aiUsageScore = totalChoices > 0 ? Math.round((choiceCounts.A / totalChoices) * 100) : 0
+  const usedAIToWrite = phaseResults?.usedAIToWrite ?? (choiceCounts.A > choiceCounts.B)
+  const usedAIToCheck = phaseResults?.usedAIToCheck ?? (choiceCounts.A > choiceCounts.B)
+  const professorProud = phaseResults?.professorProud ?? (!usedAIToWrite && !usedAIToCheck)
   const displayedText = currentNarrativeText ? currentNarrativeText.slice(0, displayedLength) : ''
 
   const currentPhase = history.length <= 2 ? 1 : history.length <= 4 ? 2 : 3
@@ -511,6 +614,13 @@ function App() {
     setShowingStarterIntro(false)
     setStarterText(DEFAULT_STARTER_JIMMY)
     summaryRequestedRef.current = false
+    setPhaseResults(null)
+    setMiniGameActive(false)
+    setMiniGameCompleted(false)
+    setMiniGameCountdownStage(null)
+    setMiniGameSequence([])
+    setMiniGameIndex(0)
+    setMiniGameTimeLeft(5)
   }
 
   return (
@@ -567,6 +677,62 @@ function App() {
           />
         )}
         <div className="relative z-10 flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+        {miniGameActive && (
+          <div className="absolute inset-0 w-full h-full z-20 flex flex-col items-center text-center justify-center bg-slate-950/90 rounded-xl border-8 border-slate-700/50">
+            <div className="flex flex-col items-center m-4">
+
+              <p className="text-amber-200/95 text-[10px] mb-2 mx-12" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+                Manual mode! <br/> <br/> Hit the sequence to help finish the work.
+              </p>
+              <div className="mb-2 text-amber-300 text-xs" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+                {miniGameCountdownStage === null && 'ready?'}
+                {miniGameCountdownStage === 'ready' && 'ready?'}
+                {miniGameCountdownStage === '3' && '3'}
+                {miniGameCountdownStage === '2' && '2'}
+                {miniGameCountdownStage === '1' && '1'}
+                {miniGameCountdownStage === 'go' && 'go!'}
+              </div>
+            </div>
+            {miniGameCountdownStage === 'go' && (
+              <>
+                <div className="flex gap-1 mb-2">
+                  {miniGameSequence.map((letter, idx) => {
+                    const isDone = idx < miniGameIndex
+                    const isCurrent = idx === miniGameIndex
+                    const bgColor = letter === 'A' ? '#ffafe4' : letter === 'B' ? '#7de2f4' : '#4bf296'
+                    return (
+                      <div
+                        key={`${letter}-${idx}`}
+                        type="button"
+                        onClick={() => handleMiniGameInput(letter)}
+                        disabled={!miniGameActive || miniGameCountdownStage !== 'go'}
+                        className={`w-10 h-10 flex items-center justify-center rounded border text-[12px] transition-all duration-150 ${
+                          isDone
+                            ? 'scale-110 opacity-0'
+                            : isCurrent
+                              ? 'border-amber-400'
+                              : 'border-slate-600'
+                        }`}
+                        style={{ fontFamily: '"Press Start 2P", cursive', backgroundColor: '#000000', color: bgColor }}
+                      >
+                        {letter}
+                      </div>
+                    )
+                  })}
+                </div>
+                <div className="w-40 h-1 bg-slate-700 rounded overflow-hidden mb-1">
+                  <div
+                    className="h-full bg-amber-400 transition-all duration-100"
+                    style={{ width: `${(Math.max(0, miniGameTimeLeft) / 5) * 100}%` }}
+                  />
+                </div>
+                <p className="text-amber-200/80 text-[9px]" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+                  {miniGameTimeLeft.toFixed(1)}s left
+                </p>
+              </>
+            )}
+          </div>
+        )}
         {history.length === 0 && !showingStarterIntro && !loading && (
           <div className="flex-1 flex flex-col w-full min-h-0 py-2 relative">
             <h1 className="arcade-title absolute top-8 left-0 right-0 text-center pt-1 z-10" style={{ fontFamily: '"Press Start 2P", cursive' }}>
@@ -810,12 +976,24 @@ function App() {
             <h2 className="text-amber-300 text-sm font-bold shrink-0 text-center tracking-wide" style={{ fontFamily: '"Press Start 2P", cursive', textShadow: '0 0 8px rgba(253, 224, 71, 0.6)' }}>
               Quest Complete
             </h2>
-            <p className="text-amber-400/90 text-[8px] uppercase shrink-0 text-center" style={{ fontFamily: '"Press Start 2P", cursive' }}>
-              AI usage score
-            </p>
-            <p className="text-amber-200 text-2xl font-bold shrink-0 text-center" style={{ fontFamily: '"Press Start 2P", cursive', color: '#fef08a', textShadow: '0 0 12px rgba(254, 240, 138, 0.8)' }}>
-              {aiUsageScore}%
-            </p>
+            <div className="flex items-center justify-center flex-wrap gap-8">
+              <div className="flex flex-col items-center">
+                <p className="text-amber-400/90 text-[8px] uppercase shrink-0 text-center" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+                  AI usage score
+                </p>
+                <p className="text-amber-200 text-2xl font-bold shrink-0 text-center" style={{ fontFamily: '"Press Start 2P", cursive', color: '#fef08a', textShadow: '0 0 12px rgba(254, 240, 138, 0.8)' }}>
+                  {aiUsageScore}%
+                </p>
+              </div>
+              <div className="flex flex-col items-center">
+                <p className="text-amber-400/90 text-[8px] uppercase shrink-0 text-center" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+                  Bonus Points
+                </p>
+                <p className="text-amber-200 text-2xl font-bold shrink-0 text-center" style={{ fontFamily: '"Press Start 2P", cursive', color: '#fef08a', textShadow: '0 0 12px rgba(254, 240, 138, 0.8)' }}>
+                +{choiceCounts.C}
+                </p>
+              </div>
+            </div>
             <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-1.5">
               {(lastEntry?.dialogue?.length ?? 0) > 0 ? (
                 lastEntry.dialogue.map((line, i) => (
@@ -847,6 +1025,56 @@ function App() {
                 </div>
               )}
             </div>
+            <div className="flex flex-col items-center gap-1 mt-1">
+              <div className="flex items-center justify-center gap-2">
+                {['A', 'B', 'C'].map((letter) => {
+                  const bgColor = letter === 'A' ? '#ffafe4' : letter === 'B' ? '#7de2f4' : '#4bf296'
+                  const count = letter === 'A' ? choiceCounts.A : letter === 'B' ? choiceCounts.B : choiceCounts.C
+                  return (
+                    <div key={letter} className="flex items-center gap-1">
+                      <div
+                        className="w-6 h-6 flex items-center justify-center rounded border border-slate-700 text-[10px]"
+                        style={{ fontFamily: '"Press Start 2P", cursive', backgroundColor: '#000000', color: bgColor }}
+                      >
+                        {letter}
+                      </div>
+                      <span className="text-amber-200/90 text-[9px]" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+                        ×{count}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+              <div className="flex flex-col items-center gap-0.5">
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <div className="flex items-center gap-1">
+                    <div
+                      className="px-1.5 h-5 flex items-center justify-center rounded border border-slate-700 text-[8px]"
+                      style={{ fontFamily: '"Press Start 2P", cursive', backgroundColor: '#000000', color: usedAIToWrite ? '#ffafe4' : '#4bf296' }}
+                    >
+                      write essay: {usedAIToWrite ? 'used AI' : 'manual'}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div
+                      className="px-1.5 h-5 flex items-center justify-center rounded border border-slate-700 text-[8px]"
+                      style={{ fontFamily: '"Press Start 2P", cursive', backgroundColor: '#000000', color: usedAIToCheck ? '#7de2f4' : '#4bf296' }}
+                    >
+                      check essay: {usedAIToCheck ? 'used AI' : 'manual'}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div
+                      className="px-1.5 h-5 flex items-center justify-center rounded border border-slate-700 text-[8px]"
+                      style={{ fontFamily: '"Press Start 2P", cursive', backgroundColor: '#000000', color: professorProud ? '#4bf296' : '#ffafe4' }}
+                    >
+                      prof kim: {professorProud ? 'proud' : 'disappointed'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <button
               type="button"
               onClick={handleStartAgain}
