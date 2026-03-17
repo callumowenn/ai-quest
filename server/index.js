@@ -407,11 +407,14 @@ async function handleTurn(req, res) {
     state.storySummary = state.storySummary ? state.storySummary + '\n\n' + paragraph : paragraph
   }
 
+  // Phase decisions:
+  // - Phase 1 (write essay): did the player choose A on turn 2?
+  // - Phase 2 (check essay): did the player choose B on turn 4?
   if (turn === 2) {
-    state.decisions.phase1UsedAI = state.choiceCounts.A > state.choiceCounts.B
+    state.decisions.phase1UsedAI = choice === 'A'
   }
   if (turn === 4) {
-    state.decisions.phase2UsedAICheck = state.choiceCounts.A > state.choiceCounts.B
+    state.decisions.phase2UsedAICheck = choice === 'B'
   }
   if (turn === 6) {
     state.decisions.phase3ProfessorProud = !state.decisions.phase1UsedAI && !state.decisions.phase2UsedAICheck

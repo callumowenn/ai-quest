@@ -64,6 +64,7 @@ function App() {
   const [miniGameIndex, setMiniGameIndex] = useState(0)
   const [miniGameAttemptId, setMiniGameAttemptId] = useState(0)
   const [miniGameTimeLeft, setMiniGameTimeLeft] = useState(5)
+  const [miniGameLastFailed, setMiniGameLastFailed] = useState(false)
   const [phaseResults, setPhaseResults] = useState(null)
 
   const lastEntry = history.length > 0 ? history[history.length - 1] : null
@@ -296,6 +297,18 @@ function App() {
     }
   }, [miniGameTimeLeft, miniGameActive, miniGameCountdownStage, miniGameSequence.length, miniGameCompleted])
 
+  // After minigame completes, briefly show a "well done" message before hiding overlay
+  useEffect(() => {
+    if (!miniGameCompleted) return
+    const id = setTimeout(() => {
+      setMiniGameActive(false)
+      setMiniGameCompleted(false)
+      setMiniGameCountdownStage(null)
+      setMiniGameLastFailed(false)
+    }, 500)
+    return () => clearTimeout(id)
+  }, [miniGameCompleted])
+
   const sendTurn = useCallback(async (choice, narrative, chosenOptionText) => {
     setLoading(true)
     setError(null)
@@ -439,6 +452,7 @@ function App() {
         setMiniGameIndex(0)
         setMiniGameCompleted(false)
         setMiniGameActive(true)
+        setMiniGameLastFailed(false)
         setMiniGameAttemptId((id) => id + 1)
       }
       choiceFeedbackTimeoutsRef.current.forEach(clearTimeout)
@@ -483,12 +497,12 @@ function App() {
         setMiniGameIndex(nextIndex)
         if (nextIndex >= miniGameSequence.length) {
           setMiniGameCompleted(true)
-          setMiniGameActive(false)
           setMiniGameCountdownStage(null)
         }
       } else {
         // Wrong key: reset attempt
         setMiniGameIndex(0)
+        setMiniGameLastFailed(true)
         setMiniGameAttemptId((id) => id + 1)
       }
     },
@@ -496,7 +510,9 @@ function App() {
   )
 
   useLayoutEffect(() => {
-    if (loading || isFinalSummary) return
+    // Don't trigger phase transition text while a minigame is active;
+    // wait until the player finishes manual mode.
+    if (loading || isFinalSummary || miniGameActive) return
     if (pendingPhaseTransition) return
     if (history.length === 3 && !phase2ShownRef.current) {
       phase2ShownRef.current = true
@@ -505,7 +521,7 @@ function App() {
       phase3ShownRef.current = true
       setPendingPhaseTransition('weeks')
     }
-  }, [loading, history.length, isFinalSummary, pendingPhaseTransition])
+  }, [loading, history.length, isFinalSummary, pendingPhaseTransition, miniGameActive])
 
   useEffect(() => {
     function onKeyDown(e) {
@@ -576,7 +592,11 @@ function App() {
   const usedAIToWrite = phaseResults?.usedAIToWrite ?? (choiceCounts.A > choiceCounts.B)
   const usedAIToCheck = phaseResults?.usedAIToCheck ?? (choiceCounts.A > choiceCounts.B)
   const professorProud = phaseResults?.professorProud ?? (!usedAIToWrite && !usedAIToCheck)
-  const displayedText = currentNarrativeText ? currentNarrativeText.slice(0, displayedLength) : ''
+  // Guard against a single-frame flash of full text when the narrative chunk changes:
+  // if the current text doesn't match the latest typewriter target, treat displayed length as 0.
+  const effectiveDisplayedLength =
+    latestNarrativeRef.current === currentNarrativeText ? displayedLength : 0
+  const displayedText = currentNarrativeText ? currentNarrativeText.slice(0, effectiveDisplayedLength) : ''
 
   const currentPhase = history.length <= 2 ? 1 : history.length <= 4 ? 2 : 3
   const phaseLabel = currentPhase === 1 ? '24 hours until deadline' : currentPhase === 2 ? '2 hours until deadline' : '2 weeks later'
@@ -621,6 +641,7 @@ function App() {
     setMiniGameSequence([])
     setMiniGameIndex(0)
     setMiniGameTimeLeft(5)
+    setMiniGameLastFailed(false)
   }
 
   return (
@@ -679,56 +700,68 @@ function App() {
         <div className="relative z-10 flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
         {miniGameActive && (
           <div className="absolute inset-0 w-full h-full z-20 flex flex-col items-center text-center justify-center bg-slate-950/90 rounded-xl border-8 border-slate-700/50">
-            <div className="flex flex-col items-center m-4">
-
-              <p className="text-amber-200/95 text-[10px] mb-2 mx-12" style={{ fontFamily: '"Press Start 2P", cursive' }}>
-                Manual mode! <br/> <br/> Hit the sequence to help finish the work.
+            {miniGameCompleted ? (
+              <p className="text-emerald-300 text-sm" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+                well done!
               </p>
-              <div className="mb-2 text-amber-300 text-xs" style={{ fontFamily: '"Press Start 2P", cursive' }}>
-                {miniGameCountdownStage === null && 'ready?'}
-                {miniGameCountdownStage === 'ready' && 'ready?'}
-                {miniGameCountdownStage === '3' && '3'}
-                {miniGameCountdownStage === '2' && '2'}
-                {miniGameCountdownStage === '1' && '1'}
-                {miniGameCountdownStage === 'go' && 'go!'}
-              </div>
-            </div>
-            {miniGameCountdownStage === 'go' && (
+            ) : (
               <>
-                <div className="flex gap-1 mb-2">
-                  {miniGameSequence.map((letter, idx) => {
-                    const isDone = idx < miniGameIndex
-                    const isCurrent = idx === miniGameIndex
-                    const bgColor = letter === 'A' ? '#ffafe4' : letter === 'B' ? '#7de2f4' : '#4bf296'
-                    return (
+                <div className="flex flex-col items-center m-4">
+                  <p className="text-amber-200/95 text-[10px] mb-1 mx-12" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+                    Manual mode! <br /> <br /> Hit the sequence to help finish the work.
+                  </p>
+                  {miniGameLastFailed && (
+                    <p className="text-rose-300 text-[9px] mb-1" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+                      not quite! try again...
+                    </p>
+                  )}
+                  <div className="mb-2 text-amber-300 text-xs" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+                    {miniGameCountdownStage === null && 'ready?'}
+                    {miniGameCountdownStage === 'ready' && 'ready?'}
+                    {miniGameCountdownStage === '3' && '3'}
+                    {miniGameCountdownStage === '2' && '2'}
+                    {miniGameCountdownStage === '1' && '1'}
+                    {miniGameCountdownStage === 'go' && 'go!'}
+                  </div>
+                </div>
+                {miniGameCountdownStage === 'go' && (
+                  <>
+                    <div className="flex gap-1 mb-2">
+                      {miniGameSequence.map((letter, idx) => {
+                        const isDone = idx < miniGameIndex
+                        const isCurrent = idx === miniGameIndex
+                        const bgColor = letter === 'A' ? '#ffafe4' : letter === 'B' ? '#7de2f4' : '#4bf296'
+                        return (
+                          <div
+                            key={`${letter}-${idx}`}
+                            type="button"
+                            onClick={() => handleMiniGameInput(letter)}
+                            disabled={!miniGameActive || miniGameCountdownStage !== 'go'}
+                            className={`w-10 h-10 flex items-center justify-center rounded border text-[12px] transition-all duration-150 ${
+                              isDone
+                                ? 'scale-110 opacity-0'
+                                : isCurrent
+                                  ? 'border-amber-400'
+                                  : 'border-slate-600'
+                            }`}
+                            style={{ fontFamily: '"Press Start 2P", cursive', backgroundColor: '#000000', color: bgColor }}
+                          >
+                            {letter}
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div className="w-40 h-1 bg-slate-700 rounded overflow-hidden mb-1">
                       <div
-                        key={`${letter}-${idx}`}
-                        type="button"
-                        onClick={() => handleMiniGameInput(letter)}
-                        disabled={!miniGameActive || miniGameCountdownStage !== 'go'}
-                        className={`w-10 h-10 flex items-center justify-center rounded border text-[12px] transition-all duration-150 ${
-                          isDone
-                            ? 'scale-110 opacity-0'
-                            : isCurrent
-                              ? 'border-amber-400'
-                              : 'border-slate-600'
-                        }`}
-                        style={{ fontFamily: '"Press Start 2P", cursive', backgroundColor: '#000000', color: bgColor }}
-                      >
-                        {letter}
-                      </div>
-                    )
-                  })}
-                </div>
-                <div className="w-40 h-1 bg-slate-700 rounded overflow-hidden mb-1">
-                  <div
-                    className="h-full bg-amber-400 transition-all duration-100"
-                    style={{ width: `${(Math.max(0, miniGameTimeLeft) / 5) * 100}%` }}
-                  />
-                </div>
-                <p className="text-amber-200/80 text-[9px]" style={{ fontFamily: '"Press Start 2P", cursive' }}>
-                  {miniGameTimeLeft.toFixed(1)}s left
-                </p>
+                        className="h-full bg-amber-400 transition-all duration-100"
+                        style={{ width: `${(Math.max(0, miniGameTimeLeft) / 5) * 100}%` }}
+                      />
+                    </div>
+                    <p className="text-amber-200/80 text-[9px]" style={{ fontFamily: '"Press Start 2P", cursive' }}>
+                      {miniGameTimeLeft.toFixed(1)}s left
+                    </p>
+                  </>
+                )}
               </>
             )}
           </div>
