@@ -245,7 +245,7 @@ function parseDialogueFromText(rawText) {
 
 /** Parse LLM raw text into { narrative, options, dialogue }. Options are protagonist dialogue lines. */
 function parseStructuredResponse(rawText) {
-  const fallbackOptions = { A: 'Use AI', B: 'Do it yourself', C: 'Something silly' }
+  const fallbackOptions = { A: 'AI is awesome!', B: 'I wanna do it myself!', C: 'Check out this meme I saw last night!' }
   if (!rawText || typeof rawText !== 'string') {
     return { narrative: '', options: fallbackOptions, dialogue: [] }
   }

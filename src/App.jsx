@@ -444,18 +444,6 @@ function App() {
       const chosenOptionText = latestOptions && latestOptions[choice] ? latestOptions[choice] : ''
       const isPotentialFinalTurn = history.length >= 6
 
-      // If player chooses B on a non-final turn, start the manual-work minigame
-      if (choice === 'B' && !isPotentialFinalTurn) {
-        const letters = ['A', 'B', 'C']
-        const sequenceLength = 8
-        const sequence = Array.from({ length: sequenceLength }, () => letters[Math.floor(Math.random() * letters.length)])
-        setMiniGameSequence(sequence)
-        setMiniGameIndex(0)
-        setMiniGameCompleted(false)
-        setMiniGameActive(true)
-        setMiniGameLastFailed(false)
-        setMiniGameAttemptId((id) => id + 1)
-      }
       choiceFeedbackTimeoutsRef.current.forEach(clearTimeout)
       choiceFeedbackTimeoutsRef.current = []
       setChoiceFeedback({ key: choice, options: latestOptions ? { ...latestOptions } : { A: '', B: '', C: '' } })
@@ -466,7 +454,22 @@ function App() {
         setChoiceFeedback(null)
         setChoiceFeedbackFaded(false)
       }, 1100)
-      choiceFeedbackTimeoutsRef.current = [startFadeId, clearId]
+      let miniGameStartId = null
+      // Delay manual mode slightly so option-select feedback is visible first.
+      if (choice === 'B' && !isPotentialFinalTurn) {
+        miniGameStartId = setTimeout(() => {
+          const letters = ['A', 'B', 'C']
+          const sequenceLength = 8
+          const sequence = Array.from({ length: sequenceLength }, () => letters[Math.floor(Math.random() * letters.length)])
+          setMiniGameSequence(sequence)
+          setMiniGameIndex(0)
+          setMiniGameCompleted(false)
+          setMiniGameActive(true)
+          setMiniGameLastFailed(false)
+          setMiniGameAttemptId((id) => id + 1)
+        }, 500)
+      }
+      choiceFeedbackTimeoutsRef.current = miniGameStartId ? [startFadeId, clearId, miniGameStartId] : [startFadeId, clearId]
       await sendTurn(choice, narrative, chosenOptionText)
     },
     [history, loading, sendTurn, latestOptions]
